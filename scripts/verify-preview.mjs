@@ -109,7 +109,13 @@ async function stopPreview(previewProcess) {
     return;
   }
 
-  previewProcess.kill('SIGTERM');
+  try {
+    // When detached, negative pid targets the whole process group so Vite
+    // does not outlive the npm wrapper on Linux CI runners.
+    process.kill(-previewProcess.pid, 'SIGTERM');
+  } catch {
+    previewProcess.kill('SIGTERM');
+  }
 
   const deadline = Date.now() + 5000;
 
@@ -118,13 +124,21 @@ async function stopPreview(previewProcess) {
   }
 
   if (previewProcess.exitCode === null) {
-    previewProcess.kill('SIGKILL');
+    try {
+      process.kill(-previewProcess.pid, 'SIGKILL');
+    } catch {
+      previewProcess.kill('SIGKILL');
+    }
   }
+
+  previewProcess.stdout.destroy();
+  previewProcess.stderr.destroy();
 }
 
 const previewProcess = spawn(previewCommand, previewArgs, {
   cwd: process.cwd(),
-  stdio: ['ignore', 'pipe', 'pipe']
+  stdio: ['ignore', 'pipe', 'pipe'],
+  detached: !isWindows
 });
 
 let stdout = '';
