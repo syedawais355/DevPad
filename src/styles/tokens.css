@@ -1,0 +1,21 @@
+:root {
+  --bg: #090909;
+  --panel: #111111;
+  --panel-elevated: #161616;
+  --sidebar: #0c0c0c;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-soft: rgba(255, 255, 255, 0.06);
+  --text: rgba(255, 255, 255, 0.9);
+  --text-muted: rgba(255, 255, 255, 0.45);
+  --text-soft: rgba(255, 255, 255, 0.2);
+  --gold: #c8a96e;
+  --mint: #7ec8a4;
+  --amber: #f6a35a;
+  --danger: #ff6b6b;
+  --radius: 14px;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  --sidebar-width: 280px;
+  --preview-width: 420px;
+  --pane-resizer-size: 14px;
+  --editor-min-width: 360px;
+}

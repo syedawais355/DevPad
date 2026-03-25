@@ -1,0 +1,47 @@
+.editor-frame {
+  position: relative;
+  padding: 18px 16px 0;
+  background:
+    radial-gradient(circle at top left, rgba(200, 169, 110, 0.08), transparent 22%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
+}
+
+.editor-frame .cm-editor {
+  height: 100%;
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 28px;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 28px 70px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(24px);
+}
+
+.editor-frame .cm-scroller {
+  overflow: auto;
+}
+
+.editor-frame .cm-editor.cm-focused {
+  border-color: rgba(200, 169, 110, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 28px 70px rgba(0, 0, 0, 0.24),
+    0 0 0 1px rgba(200, 169, 110, 0.08);
+}
+
+.editor-frame .cm-line {
+  padding-right: 28px;
+}
+
+.editor-column[data-starter='true'] .cm-editor {
+  border-color: rgba(200, 169, 110, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 28px 70px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(200, 169, 110, 0.06);
+}
+
+.editor-column[data-starter='true'] .cm-content,
+.preview[data-starter='true'] {
+  opacity: 0.88;
+}
