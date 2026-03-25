@@ -258,4 +258,4 @@ npm run preview
 
 ## License
 
-No license file is currently defined in this repository. Add one before public distribution if required by your delivery process.
+This project is licensed under the MIT License. See [LICENSE](./LICENSE) for the full text.
