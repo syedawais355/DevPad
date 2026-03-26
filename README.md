@@ -1,264 +1,216 @@
 # DevPad
 
-DevPad is a static, browser-local developer notepad built for fast Markdown drafting, code snippets, secure private notes, and shareable documents without any backend infrastructure.
+DevPad is a browser-only developer notepad for Markdown notes, code snippets, private drafting, and shareable documents. It is fully local-first: notes and settings live in IndexedDB, there is no backend API, and optional encryption is handled in the browser with Web Crypto.
 
-## Overview
+## At A Glance
 
-| Attribute | Value |
+| Area | Implementation |
 | --- | --- |
-| Application type | Static web application |
-| Runtime model | Browser-only |
-| Persistence | IndexedDB via `idb` |
-| Editor engine | CodeMirror 6 |
-| Preview engine | `marked` with `highlight.js` |
-| Share model | Compressed URL hash fragments |
-| Encryption | AES-GCM with Web Crypto API |
-| Deployment target | Static hosting or Vite preview |
+| Runtime | Static web app (Vite) |
+| Storage | IndexedDB via `idb` |
+| Editor | CodeMirror 6 |
+| Preview | `marked` + `highlight.js` + custom sanitizer |
+| Sharing | Compressed URL hash payloads (`lz-string`) |
+| Encryption | PBKDF2 + AES-GCM (Web Crypto API) |
+| Build outputs | Main app (`/`) + Help app (`/help/`) |
 
-## Core Capabilities
+## Feature Overview
 
-| Capability | Description |
+### Writing and editing
+
+| Feature | Details |
 | --- | --- |
-| Local-first notes | Notes are created, updated, and retrieved entirely in the browser. |
-| Automatic persistence | Content is autosaved on edit with IndexedDB as the source of truth. |
-| Explicit save flow | A dedicated Save action lets users rename the note title and persist a clean document title intentionally. |
-| Live preview | Markdown is rendered beside the editor with syntax-highlighted code blocks. |
-| Share links | Notes can be serialized, compressed, and shared through URL hash payloads. |
-| Optional encryption | Individual notes can be encrypted with a passphrase using AES-GCM. |
-| Backup import and export | Full note libraries can be exported to JSON and imported back from file in Settings. |
-| Responsive workspace | Sidebar and preview panes can be resized and collapsed. |
-| Static deployment | The application can be served directly as static assets without backend logic. |
+| Markdown editor | CodeMirror 6 with Markdown mode and a custom theme. |
+| Starter template | New/empty notes show a starter markdown template until first input. |
+| Autosave | Debounced persistence (`200ms`) updates the active note continuously. |
+| Manual save flow | `Save` prompts for a title and updates the top heading (`# Title`) to keep content/title aligned. |
+| Title derivation | Sidebar/export/share titles are derived from the first meaningful line when needed. |
+| Tag extraction | Hashtags like `#release` are extracted into normalized lowercased tags. |
+| Word count | Status bar live-updates word count while typing. |
 
-## Product Workflow
+### Workspace and UI
 
-```mermaid
-flowchart LR
-    A[Open DevPad] --> B[Create or Select Note]
-    B --> C[Write Markdown in CodeMirror]
-    C --> D[Autosave to IndexedDB]
-    C --> E[Render Live Preview]
-    D --> F[Reopen Later from Local Storage]
-    C --> G[Click Save]
-    G --> H[Rename Note Title]
-    H --> I[Persist Named Document]
-    C --> J[Share]
-    J --> K[Compressed URL Hash]
-    C --> L[Encrypt]
-    L --> M[Encrypted Payload Stored Locally]
-```
+| Feature | Details |
+| --- | --- |
+| Notes sidebar | Create/select/delete notes, open Help, and open Settings. |
+| Note ordering | Notes are shown by `updatedAt` descending. |
+| Pane resizing | Sidebar and preview widths are draggable with min/max constraints. |
+| Quick collapse | Double-click pane resizers to collapse/restore sidebar or preview. |
+| Appearance settings | Theme (`dark/light`), editor font size, and line height are configurable. |
+| Save/error feedback | Status bar shows transient `saved` and error/info messages. |
 
-## Architecture
+### Sharing, export, and import
 
-### System Map
+| Feature | Details |
+| --- | --- |
+| Share link generation | `Share` encodes note payload into URL hash (`#share=...`). |
+| Share payload guards | Versioned payload schema with size limit (`MAX_SHARE_BYTES = 50000`). |
+| Guest mode | Opening a share link loads note content as guest payload with Import/Dismiss actions. |
+| Single note export | Export current note as Markdown (`.md`), styled HTML (`.html`), or PDF print flow (`.pdf`). |
+| HTML/PDF export safety | Exported HTML is rendered through the same sanitized markdown pipeline. |
+| Full backup export | Settings can export all notes + settings to `devpad-export.json`. |
+| Full backup import | Settings can import a JSON backup, normalize records, upsert notes, and apply settings when present. |
 
-```mermaid
-flowchart TB
-    UI[UI Layer]
-    APP[Application Orchestration]
-    EDITOR[CodeMirror Editor]
-    PREVIEW[Markdown Preview]
-    STORE[IndexedDB Store]
-    SHARE[Share Encoder and Decoder]
-    CRYPTO[Crypto Services]
+### Security and privacy
 
-    UI --> APP
-    APP --> EDITOR
-    APP --> PREVIEW
-    APP --> STORE
-    APP --> SHARE
-    APP --> CRYPTO
-```
+| Feature | Details |
+| --- | --- |
+| Optional note encryption | Per-note encryption toggle in status bar. |
+| KDF | PBKDF2-SHA256 with `310000` iterations and 16-byte random salt. |
+| Cipher | AES-GCM with 256-bit key and 12-byte IV. |
+| Key handling | Derived keys are not persisted; unlock sessions are memory-only per runtime. |
+| Encrypted storage format | Stored as `base64(salt).base64(iv+ciphertext)` in note `content`. |
+| Preview sanitization | DOM allowlist sanitizer removes unsafe HTML and blocks unsafe links. |
+| Allowed link schemes | `http:`, `https:`, `mailto:`, `#...` only. |
+| No backend storage | Notes stay local unless user explicitly exports or shares. |
 
-### Module Responsibilities
+## Markdown Rendering Details
 
-| Area | Path | Responsibility |
-| --- | --- | --- |
-| App bootstrap | `src/main.ts` | Loads styles and mounts the application. |
-| App orchestration | `src/app.ts` | Coordinates notes, layout, preview rendering, saving, sharing, encryption, and settings. |
-| Types | `src/types` | Shared application interfaces. |
-| Constants | `src/constants` | Shared configuration values and default content. |
-| Persistence | `src/store` | IndexedDB schema and note CRUD operations. |
-| Import parser | `src/import` | Validates and normalizes exported JSON bundles before persistence. |
-| Encryption | `src/crypto` | Key derivation and AES-GCM encryption or decryption. |
-| Editor | `src/editor` | CodeMirror setup, theme, and debounce behavior. |
-| UI modules | `src/ui` | Sidebar, status bar, settings, share flow, and guest banner rendering. |
-| Styles | `src/styles` | Tokens and feature-specific styling. |
-| Tests | `tests` | Unit-level verification for storage, crypto, sharing, settings, notes, and status bar behavior. |
+- GFM and line breaks are enabled via `marked`.
+- Syntax highlighting is enabled for: `javascript`, `typescript`, `json`, `markdown`, `html`, `css`, `bash`.
+- Rendered output is sanitized with a strict tag allowlist before DOM insertion.
 
 ## Data Model
 
-### Note Schema
+### Note
 
-| Field | Type | Purpose |
-| --- | --- | --- |
-| `id` | `string` | Stable note identifier. |
-| `title` | `string` | Display name shown in the sidebar and export flow. |
-| `content` | `string` | Markdown body, plaintext or encrypted payload. |
-| `createdAt` | `number` | Creation timestamp in epoch milliseconds. |
-| `updatedAt` | `number` | Last update timestamp in epoch milliseconds. |
-| `encrypted` | `boolean` | Indicates whether the stored content is encrypted. |
-| `tags` | `string[]` | Derived tags extracted from Markdown content. |
+| Field | Type |
+| --- | --- |
+| `id` | `string` |
+| `title` | `string` |
+| `content` | `string` |
+| `createdAt` | `number` (epoch ms) |
+| `updatedAt` | `number` (epoch ms) |
+| `encrypted` | `boolean` |
+| `tags` | `string[]` |
 
-### Settings Schema
+### App settings
 
-| Field | Type | Purpose |
-| --- | --- | --- |
-| `theme` | `'dark' \| 'light'` | UI appearance mode. |
-| `fontSize` | `number` | Editor base font size. |
-| `lineHeight` | `number` | Editor and preview readability tuning. |
+| Field | Type |
+| --- | --- |
+| `theme` | `'dark' \| 'light'` |
+| `fontSize` | `number` |
+| `lineHeight` | `number` |
 
-## Save and Title Flow
+### Full backup format
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant S as Status Bar
-    participant A as App
-    participant E as Editor
-    participant D as IndexedDB
-
-    U->>S: Click Save
-    S->>A: onSave()
-    A->>U: Prompt for note title
-    U->>A: Confirm title
-    A->>E: Rewrite top heading if needed
-    A->>D: Persist note content and title
-    A->>S: Show saved indicator
+```json
+{
+  "version": 1,
+  "settings": {
+    "theme": "dark",
+    "fontSize": 13,
+    "lineHeight": 1.8
+  },
+  "notes": [
+    {
+      "id": "uuid",
+      "title": "Example",
+      "content": "# Example",
+      "createdAt": 1700000000000,
+      "updatedAt": 1700000000000,
+      "encrypted": false,
+      "tags": ["example"]
+    }
+  ]
+}
 ```
 
-## Local-First Persistence Strategy
+Import behavior:
 
-| Operation | Behavior |
+- Ignores invalid note entries.
+- Requires at least one valid note in the file.
+- Normalizes missing/invalid fields with safe defaults.
+- Applies imported settings only when a valid settings object is present.
+
+## Architecture
+
+| Path | Responsibility |
 | --- | --- |
-| Typing | Autosaves note content after debounce. |
-| Saving | Prompts for a title, updates the document heading, and persists the renamed note explicitly. |
-| Reloading | Restores notes from IndexedDB, sorted by most recent update. |
-| Sharing | Encodes a transient payload into the URL hash without requiring a server. |
-| Importing shared notes | Shared content can be imported into local storage as a new note. |
-| Importing backup files | JSON exports from DevPad can be imported to restore notes and settings. |
-| Clearing data | Wipes both notes and settings stores from IndexedDB. |
+| `src/main.ts` | Main app entry and global styles. |
+| `src/app.ts` | Application orchestration (notes, editor state, settings, sharing, encryption, import/export). |
+| `src/help.ts` | Standalone help page renderer. |
+| `src/store/db.ts` | IndexedDB schema setup and versioning. |
+| `src/store/notes.ts` | Note CRUD and sorting helpers. |
+| `src/editor/*` | CodeMirror setup, debounce, and editor theme. |
+| `src/preview/render.ts` | Markdown rendering, syntax highlight integration, and sanitization. |
+| `src/share/*` | Hash payload encode/decode and validation. |
+| `src/crypto/*` | Key derivation and AES-GCM encryption/decryption. |
+| `src/export/files.ts` | Note export to Markdown/HTML/PDF flows. |
+| `src/import/files.ts` | Backup JSON parsing, validation, and normalization. |
+| `src/ui/*` | Sidebar, status bar, settings, export modal, share modal, landing, guest banner. |
+| `tests/*.test.ts` | Unit tests for core flows and UI modules. |
 
-## Security Model
+## Tech Stack
 
-| Concern | Approach |
-| --- | --- |
-| Server-side data exposure | None. The app has no backend and no remote database. |
-| Note confidentiality | Optional per-note AES-GCM encryption with passphrase-derived keys. |
-| Key storage | Raw encryption keys are never persisted. |
-| Rendering safety | Preview content is sanitized before insertion into the DOM. |
-| Share links | Payloads are compressed and stored in the URL fragment rather than transmitted to the server path or query string. |
-
-## User Experience Map
-
-```mermaid
-mindmap
-  root((DevPad))
-    Notes
-      Create
-      Rename with Save
-      Delete
-      Encrypt
-      Export
-    Writing
-      Markdown authoring
-      Code snippets
-      Live preview
-      Starter template
-    Sharing
-      Hash payload
-      Guest import
-    Workspace
-      Resizable sidebar
-      Resizable preview
-      Settings panel
-```
-
-## Directory Map
-
-| Path | Description |
-| --- | --- |
-| `index.html` | Font loading and application mount point. |
-| `vite.config.ts` | Vite build configuration. |
-| `tsconfig.json` | Strict TypeScript configuration. |
-| `src/` | Application source. |
-| `tests/` | Automated test suite. |
+- TypeScript (strict mode)
+- Vite 5
+- Vitest + JSDOM
+- ESLint + `typescript-eslint`
+- CodeMirror 6
+- `marked`
+- `highlight.js`
+- `idb`
+- `lz-string`
 
 ## Development
 
 ### Prerequisites
 
-| Tool | Recommended version |
-| --- | --- |
-| Node.js | 20 or later |
-| npm | 10 or later |
+- Node.js 20+
+- npm 10+
 
-### Run Locally
+### Install and run
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local URL shown by Vite.
+### Scripts
 
-### Run Tests
-
-```bash
-npm test
-```
-
-### Build for Production
-
-```bash
-npm run build
-```
-
-### Preview the Production Build
-
-```bash
-npm run preview
-```
-
-## Testing Matrix
-
-| Test File | Focus |
+| Command | Purpose |
 | --- | --- |
-| `tests/crypto.test.ts` | Key derivation and AES-GCM encryption or decryption behavior. |
-| `tests/share.test.ts` | Share payload encoding and decoding rules. |
-| `tests/db.test.ts` | IndexedDB schema creation. |
-| `tests/notes.test.ts` | Note CRUD and sorting behavior. |
-| `tests/import.test.ts` | Import archive validation, normalization, and error handling. |
-| `tests/settings.test.ts` | Settings save interactions. |
-| `tests/statusbar.test.ts` | Explicit save action rendering and callback wiring. |
+| `npm run dev` | Run local dev server. |
+| `npm run lint` | Run ESLint with zero warnings allowed. |
+| `npm test` | Run all Vitest tests once. |
+| `npm run test:watch` | Run Vitest in watch mode. |
+| `npm run build` | Type-check and produce production build. |
+| `npm run preview` | Preview production build. |
+| `npm run preview:ci` | Preview on fixed host/port for CI checks. |
+| `npm run verify:preview` | Smoke-check built preview routes/assets. |
+| `npm run validate:local` | Full local quality pipeline (`lint + test + build + preview verify`). |
 
-## Operational Notes
+## Testing Coverage
 
-| Topic | Detail |
+| Test file | Focus |
 | --- | --- |
-| Backend services | None required. |
-| Offline support | Browser-local data survives refreshes through IndexedDB. |
-| Multi-device sync | Not included. Shared links are intended for transfer, not synchronization. |
-| Collaboration | Not included. Each browser instance owns its own local store. |
-| Search | Not currently implemented. |
+| `tests/crypto.test.ts` | Encryption/decryption behavior and salt generation. |
+| `tests/db.test.ts` | IndexedDB stores and indexes. |
+| `tests/notes.test.ts` | Note CRUD and sort order. |
+| `tests/share.test.ts` | Share encode/decode and size limits. |
+| `tests/export.test.ts` | Markdown/HTML/PDF export flows and sanitization expectations. |
+| `tests/import.test.ts` | Backup import parsing, normalization, and error paths. |
+| `tests/settings.test.ts` | Settings save and import-file callback wiring. |
+| `tests/statusbar.test.ts` | Status bar action callback wiring. |
+| `tests/sidebar.test.ts` | Sidebar Help link rendering. |
+| `tests/exportflow.test.ts` | Export format selection callback behavior. |
+| `tests/landing.test.ts` | Landing hero and guide-link rendering. |
 
-## Quality Standards Applied
+## Deployment Notes
 
-| Standard | Result |
-| --- | --- |
-| Strict typing | TypeScript strict mode across the project. |
-| Local-first architecture | No application backend. |
-| Production build validation | Verified with Vite production build. |
-| Automated testing | Covered by Vitest for core behaviors. |
-| Workspace hygiene | Build artifacts and local logs are ignored through `.gitignore`. |
+- Build is configured for repository base path: `/DevPad/`.
+- Multi-page build output includes the main app (`index.html`) and help page (`help/index.html`).
+- Vite chunking separates editor/preview/vendor bundles for cache-friendly output.
+- Project includes static SEO helpers in `public/` (`robots.txt`, `sitemap.xml`).
 
-## Future Extension Ideas
+## Current Constraints
 
-| Direction | Value |
-| --- | --- |
-| Full-text search | Faster retrieval across large note collections. |
-| Keyboard shortcut help | Faster onboarding for power users. |
-| Rich export targets | HTML or PDF output for publishing workflows. |
+- No account system or multi-device sync.
+- No collaborative editing.
+- No full-text search yet.
+- No backend persistence by design.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](./LICENSE) for the full text.
+MIT. See [LICENSE](./LICENSE).
