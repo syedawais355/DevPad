@@ -10,6 +10,7 @@ interface SettingsCallbacks {
   onClose: () => void;
   onClearData: () => void;
   onExportAll: () => void;
+  onImportAll: (file: File) => void;
 }
 
 function createSection(title: string): HTMLElement {
@@ -108,7 +109,30 @@ export function renderSettings(
   exportAllButton.type = 'button';
   exportAllButton.textContent = 'Export all notes';
   exportAllButton.addEventListener('click', callbacks.onExportAll);
-  dataSection.append(exportAllButton);
+
+  const importAllButton = document.createElement('button');
+  importAllButton.className = 'settings__action';
+  importAllButton.type = 'button';
+  importAllButton.textContent = 'Import notes from file';
+
+  const importInput = document.createElement('input');
+  importInput.type = 'file';
+  importInput.accept = '.json,application/json';
+  importInput.hidden = true;
+  importInput.addEventListener('change', () => {
+    const file = importInput.files?.item(0);
+    if (file === null || file === undefined) {
+      return;
+    }
+    callbacks.onImportAll(file);
+    importInput.value = '';
+  });
+
+  importAllButton.addEventListener('click', () => {
+    importInput.click();
+  });
+
+  dataSection.append(exportAllButton, importAllButton, importInput);
 
   const dangerSection = createSection('Danger zone');
   const clearButton = document.createElement('button');

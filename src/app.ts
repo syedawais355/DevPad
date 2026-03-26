@@ -32,6 +32,7 @@ import {
   createEditor,
   getContent
 } from './editor/setup';
+import { parseNotesArchive } from './import/files';
 import { renderMarkdownPreview } from './preview/render';
 import { decodeNote } from './share/decode';
 import { encodeNote } from './share/encode';
@@ -856,6 +857,52 @@ export function mountApp(root: HTMLElement): void {
     download(EXPORT_ALL_FILENAME, payload, 'application/json;charset=utf-8');
   }
 
+  async function importAllNotes(file: File): Promise<void> {
+    let archive: ReturnType<typeof parseNotesArchive>;
+
+    try {
+      archive = parseNotesArchive(await file.text());
+    } catch (error) {
+      if (statusbar !== null) {
+        statusbar.showMessage(error instanceof Error ? error.message : 'import failed');
+      }
+      return;
+    }
+
+    for (const note of archive.notes) {
+      await saveNote(note);
+      unlockedNotes.delete(note.id);
+    }
+
+    notes = await getNotes();
+    if (archive.settings !== null) {
+      settings = archive.settings;
+      await saveSettingsRecord(settings);
+      applyAppearance();
+    }
+
+    const activeNote = activeNoteId === null ? undefined : notes.find((note) => note.id === activeNoteId);
+    if (guestPayload === null && activeNote !== undefined && !activeNote.encrypted) {
+      setEditorDocument(activeNote.content);
+    } else if (activeNoteId === null && notes.length > 0) {
+      const nextNote = notes.find((note) => !note.encrypted) ?? notes[0];
+      if (nextNote.encrypted) {
+        activeNoteId = nextNote.id;
+      } else {
+        await selectNote(nextNote.id);
+      }
+    }
+
+    renderSidebarList();
+    if (statusbar !== null) {
+      statusbar.showMessage(
+        archive.settings === null
+          ? `imported ${archive.notes.length} notes`
+          : `imported ${archive.notes.length} notes and settings`
+      );
+    }
+  }
+
   async function openSettingsModal(): Promise<void> {
     closeSettingsModal();
     settingsModal = renderSettings(settings, {
@@ -882,6 +929,9 @@ export function mountApp(root: HTMLElement): void {
       },
       onExportAll(): void {
         void exportAllNotes();
+      },
+      onImportAll(file: File): void {
+        void importAllNotes(file);
       }
     });
     root.append(settingsModal);

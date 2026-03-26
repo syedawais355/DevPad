@@ -25,6 +25,7 @@ DevPad is a static, browser-local developer notepad built for fast Markdown draf
 | Live preview | Markdown is rendered beside the editor with syntax-highlighted code blocks. |
 | Share links | Notes can be serialized, compressed, and shared through URL hash payloads. |
 | Optional encryption | Individual notes can be encrypted with a passphrase using AES-GCM. |
+| Backup import and export | Full note libraries can be exported to JSON and imported back from file in Settings. |
 | Responsive workspace | Sidebar and preview panes can be resized and collapsed. |
 | Static deployment | The application can be served directly as static assets without backend logic. |
 
@@ -77,6 +78,7 @@ flowchart TB
 | Types | `src/types` | Shared application interfaces. |
 | Constants | `src/constants` | Shared configuration values and default content. |
 | Persistence | `src/store` | IndexedDB schema and note CRUD operations. |
+| Import parser | `src/import` | Validates and normalizes exported JSON bundles before persistence. |
 | Encryption | `src/crypto` | Key derivation and AES-GCM encryption or decryption. |
 | Editor | `src/editor` | CodeMirror setup, theme, and debounce behavior. |
 | UI modules | `src/ui` | Sidebar, status bar, settings, share flow, and guest banner rendering. |
@@ -133,6 +135,7 @@ sequenceDiagram
 | Reloading | Restores notes from IndexedDB, sorted by most recent update. |
 | Sharing | Encodes a transient payload into the URL hash without requiring a server. |
 | Importing shared notes | Shared content can be imported into local storage as a new note. |
+| Importing backup files | JSON exports from DevPad can be imported to restore notes and settings. |
 | Clearing data | Wipes both notes and settings stores from IndexedDB. |
 
 ## Security Model
@@ -224,6 +227,7 @@ npm run preview
 | `tests/share.test.ts` | Share payload encoding and decoding rules. |
 | `tests/db.test.ts` | IndexedDB schema creation. |
 | `tests/notes.test.ts` | Note CRUD and sorting behavior. |
+| `tests/import.test.ts` | Import archive validation, normalization, and error handling. |
 | `tests/settings.test.ts` | Settings save interactions. |
 | `tests/statusbar.test.ts` | Explicit save action rendering and callback wiring. |
 
@@ -252,7 +256,6 @@ npm run preview
 | Direction | Value |
 | --- | --- |
 | Full-text search | Faster retrieval across large note collections. |
-| Import and export bundles | Easier migration between browsers or devices. |
 | Keyboard shortcut help | Faster onboarding for power users. |
 | Rich export targets | HTML or PDF output for publishing workflows. |
 
