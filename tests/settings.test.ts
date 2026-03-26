@@ -15,7 +15,8 @@ describe('settings ui', () => {
       onSave,
       onClose: vi.fn(),
       onClearData: vi.fn(),
-      onExportAll: vi.fn()
+      onExportAll: vi.fn(),
+      onImportAll: vi.fn()
     });
 
     document.body.append(element);
@@ -47,5 +48,46 @@ describe('settings ui', () => {
       fontSize: 16,
       lineHeight: 2
     });
+  });
+
+  it('passes the selected import file to the import callback', () => {
+    const onImportAll = vi.fn();
+    const element = renderSettings(settings, {
+      onSave: vi.fn(),
+      onClose: vi.fn(),
+      onClearData: vi.fn(),
+      onExportAll: vi.fn(),
+      onImportAll
+    });
+
+    document.body.append(element);
+
+    const importButton = [...element.querySelectorAll('button')].find((button) => button.textContent === 'Import notes from file');
+    const fileInput = element.querySelector('input[type="file"]');
+
+    if (!(importButton instanceof HTMLButtonElement) || !(fileInput instanceof HTMLInputElement)) {
+      throw new Error('import controls were not rendered');
+    }
+
+    const file = new File(['{"version":1,"notes":[]}'], 'devpad-export.json', {
+      type: 'application/json'
+    });
+    const files = {
+      0: file,
+      length: 1,
+      item(index: number): File | null {
+        return index === 0 ? file : null;
+      }
+    };
+
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: files
+    });
+
+    importButton.click();
+    fileInput.dispatchEvent(new Event('change'));
+
+    expect(onImportAll).toHaveBeenCalledWith(file);
   });
 });
