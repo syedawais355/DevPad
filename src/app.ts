@@ -1,12 +1,3 @@
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import json from 'highlight.js/lib/languages/json';
-import markdownLanguage from 'highlight.js/lib/languages/markdown';
-import xml from 'highlight.js/lib/languages/xml';
-import bash from 'highlight.js/lib/languages/bash';
-import css from 'highlight.js/lib/languages/css';
-import { marked } from 'marked';
 import {
   CURRENT_SHARE_VERSION,
   DEFAULT_PREVIEW_WIDTH,
@@ -19,14 +10,12 @@ import {
   EMPTY_STRING,
   ENCRYPTED_CONTENT_SEPARATOR,
   EXPORT_ALL_FILENAME,
-  EXPORT_NOTE_FILENAME,
   MAX_PREVIEW_WIDTH,
   MAX_SIDEBAR_WIDTH,
   MIN_EDITOR_WIDTH,
   MIN_PREVIEW_WIDTH,
   MIN_SIDEBAR_WIDTH,
   NOTES_STORE,
-  NOTE_EXPORT_EXTENSION,
   PANE_COLLAPSE_THRESHOLD,
   PANE_RESIZER_SIZE,
   SETTINGS_KEY_APP,
@@ -38,29 +27,24 @@ import {
 } from './constants';
 import { decrypt, encrypt } from './crypto/aes';
 import { deriveKey, generateSalt } from './crypto/keys';
+import { exportNote, type ExportFormat } from './export/files';
 import {
   createEditor,
   getContent
 } from './editor/setup';
+import { renderMarkdownPreview } from './preview/render';
 import { decodeNote } from './share/decode';
 import { encodeNote } from './share/encode';
 import { openDB } from './store/db';
 import { deleteNote, getNotes, saveNote } from './store/notes';
 import type { AppSettings, Note, SharePayload } from './types';
+import { renderExportflow } from './ui/exportflow';
 import { renderGuestBanner } from './ui/guestbanner';
 import { renderLanding } from './ui/landing';
 import { renderSettings } from './ui/settings';
 import { renderShareflow } from './ui/shareflow';
 import { renderSidebar } from './ui/sidebar';
 import { renderStatusbar, type StatusbarElement } from './ui/statusbar';
-
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('typescript', typescript);
-hljs.registerLanguage('json', json);
-hljs.registerLanguage('markdown', markdownLanguage);
-hljs.registerLanguage('html', xml);
-hljs.registerLanguage('css', css);
-hljs.registerLanguage('bash', bash);
 
 interface SettingsRecord {
   key: string;
@@ -182,139 +166,6 @@ function download(name: string, content: string, type: string): void {
   URL.revokeObjectURL(url);
 }
 
-function sanitizeFilename(value: string): string {
-  return value.replace(/[^a-z0-9_-]+/giu, '-').replace(/^-+|-+$/gu, '') || EXPORT_NOTE_FILENAME;
-}
-
-function cloneHighlightedNodes(source: Node, target: HTMLElement): void {
-  for (const child of source.childNodes) {
-    if (child.nodeType === Node.TEXT_NODE) {
-      target.append(document.createTextNode(child.textContent ?? EMPTY_STRING));
-      continue;
-    }
-    if (child.nodeType !== Node.ELEMENT_NODE) {
-      continue;
-    }
-    const element = child as HTMLElement;
-    if (element.tagName.toLowerCase() !== 'span') {
-      cloneHighlightedNodes(element, target);
-      continue;
-    }
-    const span = document.createElement('span');
-    span.className = element.className;
-    cloneHighlightedNodes(element, span);
-    target.append(span);
-  }
-}
-
-function createCodeElement(code: string, className: string): HTMLElement {
-  const codeElement = document.createElement('code');
-  const languageClass = className.replace('language-', EMPTY_STRING);
-  const highlighted = languageClass.length > 0
-    ? hljs.highlight(code, { language: languageClass, ignoreIllegals: true })
-    : hljs.highlightAuto(code);
-  const parsed = new DOMParser().parseFromString(`<div>${highlighted.value}</div>`, 'text/html');
-  const wrapper = parsed.body.firstElementChild;
-  if (wrapper instanceof HTMLElement) {
-    cloneHighlightedNodes(wrapper, codeElement);
-  } else {
-    codeElement.textContent = code;
-  }
-  return codeElement;
-}
-
-function sanitizePreviewNode(node: Node): Node | null {
-  if (node.nodeType === Node.TEXT_NODE) {
-    return document.createTextNode(node.textContent ?? EMPTY_STRING);
-  }
-
-  if (node.nodeType !== Node.ELEMENT_NODE) {
-    return null;
-  }
-
-  const element = node as HTMLElement;
-  const tag = element.tagName.toLowerCase();
-  const allowed = new Set([
-    'a',
-    'blockquote',
-    'br',
-    'code',
-    'em',
-    'h1',
-    'h2',
-    'h3',
-    'h4',
-    'h5',
-    'h6',
-    'hr',
-    'li',
-    'ol',
-    'p',
-    'pre',
-    'strong',
-    'table',
-    'tbody',
-    'td',
-    'th',
-    'thead',
-    'tr',
-    'ul'
-  ]);
-
-  if (!allowed.has(tag)) {
-    const fragment = document.createDocumentFragment();
-    for (const child of [...element.childNodes]) {
-      const sanitized = sanitizePreviewNode(child);
-      if (sanitized !== null) {
-        fragment.append(sanitized);
-      }
-    }
-    return fragment;
-  }
-
-  if (tag === 'pre') {
-    const pre = document.createElement('pre');
-    const codeNode = element.querySelector('code');
-    const codeText = codeNode?.textContent ?? element.textContent ?? EMPTY_STRING;
-    const className = codeNode?.className ?? EMPTY_STRING;
-    pre.append(createCodeElement(codeText, className));
-    return pre;
-  }
-
-  const next = document.createElement(tag);
-  if (tag === 'a') {
-    const href = element.getAttribute('href') ?? EMPTY_STRING;
-    if (/^(https?:|mailto:|#)/u.test(href)) {
-      next.setAttribute('href', href);
-      next.setAttribute('target', '_blank');
-      next.setAttribute('rel', 'noreferrer');
-    }
-  }
-
-  for (const child of [...element.childNodes]) {
-    const sanitized = sanitizePreviewNode(child);
-    if (sanitized !== null) {
-      next.append(sanitized);
-    }
-  }
-  return next;
-}
-
-function renderPreview(container: HTMLElement, content: string): void {
-  const html = marked.parse(content, {
-    gfm: true,
-    breaks: true
-  }) as string;
-  const documentNode = new DOMParser().parseFromString(html, 'text/html');
-  container.replaceChildren();
-  for (const child of [...documentNode.body.childNodes]) {
-    const sanitized = sanitizePreviewNode(child);
-    if (sanitized !== null) {
-      container.append(sanitized);
-    }
-  }
-}
-
 async function loadSettings(): Promise<AppSettings> {
   const database = await openDB();
   const record = await database.get(SETTINGS_STORE, SETTINGS_KEY_APP) as SettingsRecord | undefined;
@@ -414,6 +265,7 @@ export function mountApp(root: HTMLElement): void {
   let statusbar: StatusbarElement | null = null;
   let settingsModal: HTMLElement | null = null;
   let shareModal: HTMLElement | null = null;
+  let exportModal: HTMLElement | null = null;
   let isStarterTemplateVisible = false;
   let isHydrating = false;
   let paneLayout: PaneLayout = {
@@ -559,6 +411,13 @@ export function mountApp(root: HTMLElement): void {
     }
   }
 
+  function closeExportModal(): void {
+    if (exportModal !== null) {
+      exportModal.remove();
+      exportModal = null;
+    }
+  }
+
   function closeSettingsModal(): void {
     if (settingsModal !== null) {
       settingsModal.remove();
@@ -664,7 +523,7 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function refreshPreviewAndStatus(): void {
-    renderPreview(preview, getPreviewContent());
+    renderMarkdownPreview(preview, getPreviewContent());
     updateStatusbarWordCount(getCurrentContent());
   }
 
@@ -842,10 +701,33 @@ export function mountApp(root: HTMLElement): void {
     await persistCurrentNote(content, title);
   }
 
-  function exportCurrentNote(): void {
+  async function exportCurrentNote(format: ExportFormat): Promise<void> {
     const content = getCurrentContent();
     const title = guestPayload?.title ?? notes.find((note) => note.id === activeNoteId)?.title ?? DEFAULT_NOTE_TITLE;
-    download(`${sanitizeFilename(title)}${NOTE_EXPORT_EXTENSION}`, content, 'text/markdown;charset=utf-8');
+    await exportNote({ title, content }, format, root.ownerDocument ?? document);
+  }
+
+  function openExportModal(): void {
+    closeExportModal();
+    const title = guestPayload?.title ?? notes.find((note) => note.id === activeNoteId)?.title ?? DEFAULT_NOTE_TITLE;
+    exportModal = renderExportflow(title, {
+      onSelect(format: ExportFormat): void {
+        closeExportModal();
+        void (async (): Promise<void> => {
+          try {
+            await exportCurrentNote(format);
+          } catch (error) {
+            if (statusbar !== null) {
+              statusbar.showMessage(error instanceof Error ? error.message : 'export failed');
+            }
+          }
+        })();
+      },
+      onClose(): void {
+        closeExportModal();
+      }
+    });
+    root.append(exportModal);
   }
 
   async function toggleEncryption(): Promise<void> {
@@ -1009,7 +891,7 @@ export function mountApp(root: HTMLElement): void {
     if (isHydrating) {
       return;
     }
-    renderPreview(preview, content);
+    renderMarkdownPreview(preview, content);
     updateStatusbarWordCount(content);
     void persistCurrentNote(content);
   });
@@ -1078,7 +960,7 @@ export function mountApp(root: HTMLElement): void {
         void toggleEncryption();
       },
       onExport(): void {
-        exportCurrentNote();
+        openExportModal();
       }
     });
     statusbarHost.replaceChildren(statusbar);
