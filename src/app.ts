@@ -1,4 +1,10 @@
 import {
+  deleteLine,
+  moveLineDown,
+  moveLineUp,
+  redo
+} from '@codemirror/commands';
+import {
   CURRENT_SHARE_VERSION,
   DEFAULT_PREVIEW_WIDTH,
   DEFAULT_SIDEBAR_WIDTH,
@@ -34,17 +40,21 @@ import {
 } from './editor/setup';
 import { parseNotesArchive } from './import/files';
 import { renderMarkdownPreview } from './preview/render';
+import { formatShortcut, getShortcutDefinition, isMacPlatform, SHORTCUT_DEFINITIONS } from './shortcuts/definitions';
+import { setupShortcutSystem } from './shortcuts/system';
 import { decodeNote } from './share/decode';
 import { encodeNote } from './share/encode';
 import { openDB } from './store/db';
 import { deleteNote, getNotes, saveNote } from './store/notes';
 import type { AppSettings, Note, SharePayload } from './types';
+import { renderCommandPalette, type CommandPaletteItem } from './ui/commandpalette';
 import { renderExportflow } from './ui/exportflow';
 import { renderGuestBanner } from './ui/guestbanner';
 import { renderLanding } from './ui/landing';
 import { renderSettings } from './ui/settings';
 import { renderShareflow } from './ui/shareflow';
 import { renderSidebar } from './ui/sidebar';
+import { renderShortcutsHelp } from './ui/shortcutshelp';
 import { renderStatusbar, type StatusbarElement } from './ui/statusbar';
 
 interface SettingsRecord {
@@ -60,6 +70,11 @@ interface EncryptionSession {
 interface PaneLayout {
   sidebar: number;
   preview: number;
+}
+
+interface SearchMatch {
+  from: number;
+  to: number;
 }
 
 const defaultSettings: AppSettings = {
@@ -155,6 +170,10 @@ function applyTitleToContent(content: string, title: string): string {
 function countWords(content: string): number {
   const words = content.trim().split(/\s+/u).filter((word) => word.length > 0);
   return words.length;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 function download(name: string, content: string, type: string): void {
@@ -259,6 +278,12 @@ export function mountApp(root: HTMLElement): void {
   shell.append(sidebarHost, sidebarResizer, main);
   root.replaceChildren(shell);
 
+  const shortcutImportInput = document.createElement('input');
+  shortcutImportInput.type = 'file';
+  shortcutImportInput.accept = '.json,application/json';
+  shortcutImportInput.hidden = true;
+  root.append(shortcutImportInput);
+
   let settings = defaultSettings;
   let notes: Note[] = [];
   let activeNoteId: string | null = null;
@@ -267,8 +292,13 @@ export function mountApp(root: HTMLElement): void {
   let settingsModal: HTMLElement | null = null;
   let shareModal: HTMLElement | null = null;
   let exportModal: HTMLElement | null = null;
+  let commandPaletteModal: HTMLElement | null = null;
+  let shortcutsHelpModal: HTMLElement | null = null;
   let isStarterTemplateVisible = false;
   let isHydrating = false;
+  let noteSearchQuery = EMPTY_STRING;
+  let noteSearchIndex = -1;
+  const closedNoteHistory: string[] = [];
   let paneLayout: PaneLayout = {
     sidebar: DEFAULT_SIDEBAR_WIDTH,
     preview: DEFAULT_PREVIEW_WIDTH
@@ -279,6 +309,15 @@ export function mountApp(root: HTMLElement): void {
   };
   const unlockedNotes = new Map<string, EncryptionSession>();
   landingHost.replaceChildren(renderLanding());
+
+  shortcutImportInput.addEventListener('change', () => {
+    const file = shortcutImportInput.files?.item(0);
+    if (file === null || file === undefined) {
+      return;
+    }
+    void importAllNotes(file);
+    shortcutImportInput.value = '';
+  });
 
   function clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
@@ -426,6 +465,30 @@ export function mountApp(root: HTMLElement): void {
     }
   }
 
+  function closeCommandPaletteModal(): void {
+    if (commandPaletteModal !== null) {
+      commandPaletteModal.remove();
+      commandPaletteModal = null;
+    }
+  }
+
+  function closeShortcutsHelpModal(): void {
+    if (shortcutsHelpModal !== null) {
+      shortcutsHelpModal.remove();
+      shortcutsHelpModal = null;
+    }
+  }
+
+  function hasBlockingModalOpen(): boolean {
+    return (
+      settingsModal !== null ||
+      shareModal !== null ||
+      exportModal !== null ||
+      commandPaletteModal !== null ||
+      shortcutsHelpModal !== null
+    );
+  }
+
   function updateStatusbarWordCount(content: string): void {
     if (statusbar === null) {
       return;
@@ -457,6 +520,37 @@ export function mountApp(root: HTMLElement): void {
       return activeTitle;
     }
     return deriveTitle(content);
+  }
+
+  function getActiveNoteIndex(): number {
+    if (activeNoteId === null) {
+      return -1;
+    }
+    return notes.findIndex((note) => note.id === activeNoteId);
+  }
+
+  function focusSidebar(): void {
+    if (paneLayout.sidebar === 0) {
+      paneLayout.sidebar = constrainSidebarWidth(rememberedPaneLayout.sidebar);
+      applyPaneLayout();
+    }
+
+    const activeItem = sidebarHost.querySelector('.sidebar__item[data-active="true"] .sidebar__item-button');
+    const fallback = sidebarHost.querySelector('.sidebar__item-button');
+    const target = activeItem ?? fallback;
+    if (target instanceof HTMLElement) {
+      target.focus();
+    }
+  }
+
+  async function selectRelativeNote(direction: 1 | -1): Promise<void> {
+    if (notes.length === 0) {
+      return;
+    }
+    const currentIndex = getActiveNoteIndex();
+    const base = currentIndex < 0 ? 0 : currentIndex;
+    const nextIndex = (base + direction + notes.length) % notes.length;
+    await selectNote(notes[nextIndex].id);
   }
 
   function applyAppearance(): void {
@@ -648,6 +742,11 @@ export function mountApp(root: HTMLElement): void {
   async function removeNote(id: string): Promise<void> {
     await deleteNote(id);
     unlockedNotes.delete(id);
+    for (let index = closedNoteHistory.length - 1; index >= 0; index -= 1) {
+      if (closedNoteHistory[index] === id) {
+        closedNoteHistory.splice(index, 1);
+      }
+    }
     notes = notes.filter((note) => note.id !== id);
     if (activeNoteId === id) {
       activeNoteId = null;
@@ -709,6 +808,7 @@ export function mountApp(root: HTMLElement): void {
   }
 
   function openExportModal(): void {
+    closeCommandPaletteModal();
     closeExportModal();
     const title = guestPayload?.title ?? notes.find((note) => note.id === activeNoteId)?.title ?? DEFAULT_NOTE_TITLE;
     exportModal = renderExportflow(title, {
@@ -787,6 +887,7 @@ export function mountApp(root: HTMLElement): void {
 
   function openShareModal(): void {
     try {
+      closeCommandPaletteModal();
       closeShareModal();
       const content = getCurrentContent();
       const payload = {
@@ -903,7 +1004,425 @@ export function mountApp(root: HTMLElement): void {
     }
   }
 
+  function computeSearchMatches(content: string, query: string): SearchMatch[] {
+    const normalizedQuery = query.trim();
+    if (normalizedQuery.length === 0) {
+      return [];
+    }
+    const expression = new RegExp(escapeRegExp(normalizedQuery), 'giu');
+    const matches: SearchMatch[] = [];
+    let match = expression.exec(content);
+    while (match !== null) {
+      matches.push({
+        from: match.index,
+        to: match.index + match[0].length
+      });
+      match = expression.exec(content);
+    }
+    return matches;
+  }
+
+  function focusSearchMatch(match: SearchMatch, matchIndex: number, total: number): void {
+    editorView.dispatch({
+      selection: {
+        anchor: match.from,
+        head: match.to
+      },
+      scrollIntoView: true
+    });
+    editorView.focus();
+    if (statusbar !== null) {
+      statusbar.showMessage(`${matchIndex + 1}/${total} matches`);
+    }
+  }
+
+  function openFindPrompt(): void {
+    const query = window.prompt('Find in note', noteSearchQuery);
+    if (query === null) {
+      return;
+    }
+    noteSearchQuery = query.trim();
+    noteSearchIndex = -1;
+    if (noteSearchQuery.length === 0) {
+      if (statusbar !== null) {
+        statusbar.showMessage('search cleared');
+      }
+      return;
+    }
+    const matches = computeSearchMatches(getCurrentContent(), noteSearchQuery);
+    if (matches.length === 0) {
+      if (statusbar !== null) {
+        statusbar.showMessage('no matches found');
+      }
+      return;
+    }
+    noteSearchIndex = 0;
+    focusSearchMatch(matches[0], noteSearchIndex, matches.length);
+  }
+
+  function findNext(direction: 1 | -1): void {
+    if (noteSearchQuery.length === 0) {
+      openFindPrompt();
+      return;
+    }
+    const matches = computeSearchMatches(getCurrentContent(), noteSearchQuery);
+    if (matches.length === 0) {
+      if (statusbar !== null) {
+        statusbar.showMessage('no matches found');
+      }
+      return;
+    }
+    noteSearchIndex = (noteSearchIndex + direction + matches.length) % matches.length;
+    focusSearchMatch(matches[noteSearchIndex], noteSearchIndex, matches.length);
+  }
+
+  function applyInlineWrap(prefix: string, suffix: string, placeholder: string): void {
+    const selection = editorView.state.selection.main;
+    const selectedText = editorView.state.sliceDoc(selection.from, selection.to);
+    const content = selectedText.length > 0 ? selectedText : placeholder;
+    const insert = `${prefix}${content}${suffix}`;
+    const anchor = selection.from + prefix.length;
+    const head = anchor + content.length;
+
+    if (isStarterTemplateVisible) {
+      setStarterTemplateVisible(false);
+    }
+
+    editorView.dispatch({
+      changes: {
+        from: selection.from,
+        to: selection.to,
+        insert
+      },
+      selection: {
+        anchor,
+        head
+      },
+      scrollIntoView: true
+    });
+    editorView.focus();
+  }
+
+  function insertLinkAtCursor(): void {
+    const selection = editorView.state.selection.main;
+    const selectedText = editorView.state.sliceDoc(selection.from, selection.to);
+    const defaultLabel = selectedText.length > 0 ? selectedText : 'link';
+    const url = window.prompt('Link URL', 'https://');
+    if (url === null) {
+      return;
+    }
+    const normalizedUrl = url.trim();
+    if (normalizedUrl.length === 0) {
+      if (statusbar !== null) {
+        statusbar.showMessage('link url is required');
+      }
+      return;
+    }
+    const insert = `[${defaultLabel}](${normalizedUrl})`;
+
+    if (isStarterTemplateVisible) {
+      setStarterTemplateVisible(false);
+    }
+
+    editorView.dispatch({
+      changes: {
+        from: selection.from,
+        to: selection.to,
+        insert
+      },
+      selection: {
+        anchor: selection.from + 1,
+        head: selection.from + 1 + defaultLabel.length
+      },
+      scrollIntoView: true
+    });
+    editorView.focus();
+  }
+
+  function addTagAtCursor(): void {
+    const value = window.prompt('Add tag (without #)', EMPTY_STRING);
+    if (value === null) {
+      return;
+    }
+    const normalized = value.trim().toLowerCase().replace(/\s+/gu, '-');
+    if (!/^[a-z0-9_-]+$/u.test(normalized)) {
+      if (statusbar !== null) {
+        statusbar.showMessage('tag must use letters, numbers, dashes, or underscores');
+      }
+      return;
+    }
+
+    const selection = editorView.state.selection.main;
+    const documentText = editorView.state.doc.toString();
+    const previousCharacter = selection.from > 0 ? documentText.slice(selection.from - 1, selection.from) : EMPTY_STRING;
+    const prefix = previousCharacter.length === 0 || /\s/u.test(previousCharacter) ? EMPTY_STRING : ' ';
+    const insert = `${prefix}#${normalized}`;
+
+    if (isStarterTemplateVisible) {
+      setStarterTemplateVisible(false);
+    }
+
+    editorView.dispatch({
+      changes: {
+        from: selection.from,
+        to: selection.to,
+        insert
+      },
+      selection: {
+        anchor: selection.from + insert.length
+      },
+      scrollIntoView: true
+    });
+    editorView.focus();
+  }
+
+  async function closeCurrentNote(): Promise<void> {
+    if (guestPayload !== null) {
+      dismissGuestNote();
+      return;
+    }
+    if (activeNoteId === null || notes.length <= 1) {
+      if (statusbar !== null) {
+        statusbar.showMessage('no other note to switch to');
+      }
+      return;
+    }
+    const currentIndex = getActiveNoteIndex();
+    if (currentIndex < 0) {
+      return;
+    }
+    closedNoteHistory.unshift(activeNoteId);
+    if (closedNoteHistory.length > 30) {
+      closedNoteHistory.length = 30;
+    }
+    const nextIndex = (currentIndex + 1) % notes.length;
+    await selectNote(notes[nextIndex].id);
+  }
+
+  async function reopenLastClosedNote(): Promise<void> {
+    while (closedNoteHistory.length > 0) {
+      const id = closedNoteHistory.shift();
+      if (id === undefined) {
+        break;
+      }
+      const exists = notes.some((note) => note.id === id);
+      if (!exists) {
+        continue;
+      }
+      await selectNote(id);
+      return;
+    }
+    if (statusbar !== null) {
+      statusbar.showMessage('no recently closed notes');
+    }
+  }
+
+  async function promptGlobalSearch(): Promise<void> {
+    const query = window.prompt('Search across notes', EMPTY_STRING);
+    if (query === null) {
+      return;
+    }
+    const normalizedQuery = query.trim().toLowerCase();
+    if (normalizedQuery.length === 0) {
+      return;
+    }
+    const matches = notes.filter((note) => {
+      if (note.title.toLowerCase().includes(normalizedQuery)) {
+        return true;
+      }
+      if (note.tags.some((tag) => tag.includes(normalizedQuery))) {
+        return true;
+      }
+      if (!note.encrypted && note.content.toLowerCase().includes(normalizedQuery)) {
+        return true;
+      }
+      return false;
+    });
+
+    if (matches.length === 0) {
+      if (statusbar !== null) {
+        statusbar.showMessage('no notes matched search');
+      }
+      return;
+    }
+
+    await selectNote(matches[0].id);
+    if (statusbar !== null) {
+      statusbar.showMessage(`${matches.length} notes matched`);
+    }
+  }
+
+  async function toggleTheme(): Promise<void> {
+    settings = {
+      ...settings,
+      theme: settings.theme === 'dark' ? 'light' : 'dark'
+    };
+    await saveSettingsRecord(settings);
+    applyAppearance();
+  }
+
+  async function toggleFullscreen(): Promise<void> {
+    const sourceDocument = root.ownerDocument ?? document;
+    try {
+      if (sourceDocument.fullscreenElement === null) {
+        await root.requestFullscreen?.();
+      } else if (sourceDocument.exitFullscreen !== undefined) {
+        await sourceDocument.exitFullscreen();
+      }
+    } catch (error) {
+      if (statusbar !== null) {
+        statusbar.showMessage(error instanceof Error ? error.message : 'fullscreen failed');
+      }
+    }
+  }
+
+  function openImportFilePicker(): void {
+    shortcutImportInput.click();
+  }
+
+  function openShortcutsHelp(): void {
+    closeCommandPaletteModal();
+    closeShortcutsHelpModal();
+    shortcutsHelpModal = renderShortcutsHelp(SHORTCUT_DEFINITIONS, isMacPlatform(window.navigator.platform), {
+      onClose(): void {
+        closeShortcutsHelpModal();
+      }
+    });
+    root.append(shortcutsHelpModal);
+  }
+
+  async function toggleDeleteCurrentNote(): Promise<void> {
+    if (guestPayload !== null || activeNoteId === null) {
+      return;
+    }
+    const note = notes.find((entry) => entry.id === activeNoteId);
+    if (note === undefined) {
+      return;
+    }
+    const confirmed = window.confirm(`Delete "${note.title || DEFAULT_NOTE_TITLE}"?`);
+    if (!confirmed) {
+      return;
+    }
+    await removeNote(note.id);
+  }
+
+  async function editCurrentNoteTitle(): Promise<void> {
+    await saveCurrentDocument();
+  }
+
+  function openCommandPalette(): void {
+    closeCommandPaletteModal();
+    const isMac = isMacPlatform(window.navigator.platform);
+    const actions: CommandPaletteItem[] = [
+      {
+        id: 'action:new-note',
+        title: 'New note',
+        description: 'Create a fresh note',
+        group: 'Action',
+        keywords: ['new', 'create', 'note'],
+        shortcut: formatShortcut(getShortcutDefinition('new_note').combo, isMac)
+      },
+      {
+        id: 'action:save-note',
+        title: 'Save note',
+        description: 'Rename and persist current note title',
+        group: 'Action',
+        keywords: ['save', 'rename', 'title'],
+        shortcut: formatShortcut(getShortcutDefinition('save_note').combo, isMac)
+      },
+      {
+        id: 'action:open-settings',
+        title: 'Open settings',
+        description: 'Open appearance and data controls',
+        group: 'Action',
+        keywords: ['settings', 'preferences', 'theme'],
+        shortcut: formatShortcut(getShortcutDefinition('open_settings').combo, isMac)
+      },
+      {
+        id: 'action:export-note',
+        title: 'Export note',
+        description: 'Open markdown/html/pdf export flow',
+        group: 'Action',
+        keywords: ['export', 'pdf', 'html', 'markdown'],
+        shortcut: formatShortcut(getShortcutDefinition('export_note').combo, isMac)
+      },
+      {
+        id: 'action:import-notes',
+        title: 'Import notes from file',
+        description: 'Import full notes backup JSON',
+        group: 'Action',
+        keywords: ['import', 'backup', 'restore'],
+        shortcut: formatShortcut(getShortcutDefinition('import_backup').combo, isMac)
+      },
+      {
+        id: 'action:toggle-theme',
+        title: 'Toggle theme',
+        description: 'Switch dark and light appearance',
+        group: 'Action',
+        keywords: ['theme', 'dark', 'light'],
+        shortcut: formatShortcut(getShortcutDefinition('toggle_theme').combo, isMac)
+      },
+      {
+        id: 'action:shortcuts',
+        title: 'Show keyboard shortcuts',
+        description: 'Open shortcut cheat sheet',
+        group: 'Action',
+        keywords: ['keyboard', 'shortcuts', 'help'],
+        shortcut: formatShortcut(getShortcutDefinition('open_shortcuts_help').combo, isMac)
+      }
+    ];
+
+    const noteItems: CommandPaletteItem[] = notes.map((note) => ({
+      id: `note:${note.id}`,
+      title: note.title || DEFAULT_NOTE_TITLE,
+      description: note.encrypted ? 'Encrypted note' : 'Open note',
+      group: 'Notes',
+      keywords: [note.title, ...note.tags]
+    }));
+
+    commandPaletteModal = renderCommandPalette([...actions, ...noteItems], {
+      onSelect(id: string): void {
+        closeCommandPaletteModal();
+        if (id.startsWith('note:')) {
+          void selectNote(id.slice('note:'.length));
+          return;
+        }
+        switch (id) {
+          case 'action:new-note':
+            void createNote();
+            return;
+          case 'action:save-note':
+            void saveCurrentDocument();
+            return;
+          case 'action:open-settings':
+            void openSettingsModal();
+            return;
+          case 'action:export-note':
+            openExportModal();
+            return;
+          case 'action:import-notes':
+            openImportFilePicker();
+            return;
+          case 'action:toggle-theme':
+            void toggleTheme();
+            return;
+          case 'action:shortcuts':
+            openShortcutsHelp();
+            return;
+          default:
+            return;
+        }
+      },
+      onClose(): void {
+        closeCommandPaletteModal();
+      }
+    });
+
+    root.append(commandPaletteModal);
+  }
+
   async function openSettingsModal(): Promise<void> {
+    closeCommandPaletteModal();
     closeSettingsModal();
     settingsModal = renderSettings(settings, {
       onSave(nextSettings: AppSettings): void {
@@ -1015,6 +1534,354 @@ export function mountApp(root: HTMLElement): void {
     });
     statusbarHost.replaceChildren(statusbar);
   }
+
+  const isMac = isMacPlatform(window.navigator.platform);
+  const combo = (id: Parameters<typeof getShortcutDefinition>[0]): string => getShortcutDefinition(id).combo;
+
+  setupShortcutSystem(window, isMac, [
+    {
+      id: 'save_note',
+      combo: combo('save_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void saveCurrentDocument();
+      }
+    },
+    {
+      id: 'new_note',
+      combo: combo('new_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void createNote();
+      }
+    },
+    {
+      id: 'focus_sidebar',
+      combo: combo('focus_sidebar'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        focusSidebar();
+      }
+    },
+    {
+      id: 'close_note',
+      combo: combo('close_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void closeCurrentNote();
+      }
+    },
+    {
+      id: 'delete_note',
+      combo: combo('delete_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void toggleDeleteCurrentNote();
+      }
+    },
+    {
+      id: 'command_palette',
+      combo: combo('command_palette'),
+      handler: () => {
+        if (commandPaletteModal !== null) {
+          closeCommandPaletteModal();
+          return;
+        }
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        openCommandPalette();
+      }
+    },
+    {
+      id: 'find_in_note',
+      combo: combo('find_in_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        openFindPrompt();
+      }
+    },
+    {
+      id: 'find_next',
+      combo: combo('find_next'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        findNext(1);
+      }
+    },
+    {
+      id: 'find_previous',
+      combo: combo('find_previous'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        findNext(-1);
+      }
+    },
+    {
+      id: 'next_note',
+      combo: combo('next_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void selectRelativeNote(1);
+      }
+    },
+    {
+      id: 'previous_note',
+      combo: combo('previous_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void selectRelativeNote(-1);
+      }
+    },
+    {
+      id: 'next_note_tab',
+      combo: combo('next_note_tab'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void selectRelativeNote(1);
+      }
+    },
+    {
+      id: 'previous_note_tab',
+      combo: combo('previous_note_tab'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void selectRelativeNote(-1);
+      }
+    },
+    {
+      id: 'bold',
+      combo: combo('bold'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        applyInlineWrap('**', '**', 'bold text');
+      }
+    },
+    {
+      id: 'italic',
+      combo: combo('italic'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        applyInlineWrap('*', '*', 'italic text');
+      }
+    },
+    {
+      id: 'underline',
+      combo: combo('underline'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        applyInlineWrap('<u>', '</u>', 'underlined');
+      }
+    },
+    {
+      id: 'redo',
+      combo: combo('redo'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        redo(editorView);
+      }
+    },
+    {
+      id: 'redo',
+      combo: 'mod+shift+z',
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        redo(editorView);
+      }
+    },
+    {
+      id: 'delete_line',
+      combo: combo('delete_line'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        deleteLine(editorView);
+      }
+    },
+    {
+      id: 'move_line_up',
+      combo: combo('move_line_up'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        moveLineUp(editorView);
+      }
+    },
+    {
+      id: 'move_line_down',
+      combo: combo('move_line_down'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        moveLineDown(editorView);
+      }
+    },
+    {
+      id: 'insert_link',
+      combo: combo('insert_link'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        insertLinkAtCursor();
+      }
+    },
+    {
+      id: 'save_as_export',
+      combo: combo('save_as_export'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        openExportModal();
+      }
+    },
+    {
+      id: 'export_note',
+      combo: combo('export_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        openExportModal();
+      }
+    },
+    {
+      id: 'edit_note_title',
+      combo: combo('edit_note_title'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void editCurrentNoteTitle();
+      }
+    },
+    {
+      id: 'global_search',
+      combo: combo('global_search'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void promptGlobalSearch();
+      }
+    },
+    {
+      id: 'reopen_closed_note',
+      combo: combo('reopen_closed_note'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void reopenLastClosedNote();
+      }
+    },
+    {
+      id: 'add_tag',
+      combo: combo('add_tag'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        addTagAtCursor();
+      }
+    },
+    {
+      id: 'import_backup',
+      combo: combo('import_backup'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        openImportFilePicker();
+      }
+    },
+    {
+      id: 'open_shortcuts_help',
+      combo: combo('open_shortcuts_help'),
+      handler: () => {
+        if (shortcutsHelpModal !== null) {
+          closeShortcutsHelpModal();
+          return;
+        }
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        openShortcutsHelp();
+      }
+    },
+    {
+      id: 'open_settings',
+      combo: combo('open_settings'),
+      handler: () => {
+        if (settingsModal !== null) {
+          closeSettingsModal();
+          return;
+        }
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void openSettingsModal();
+      }
+    },
+    {
+      id: 'toggle_theme',
+      combo: combo('toggle_theme'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void toggleTheme();
+      }
+    },
+    {
+      id: 'toggle_fullscreen',
+      combo: combo('toggle_fullscreen'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        void toggleFullscreen();
+      }
+    }
+  ]);
 
   window.addEventListener('resize', () => {
     paneLayout = {
