@@ -91,11 +91,15 @@ if (root instanceof HTMLElement) {
       'Use Share to generate a compressed URL hash that contains the note payload. This keeps sharing browser-first and server-independent.',
       'Shared notes can be opened and imported as new local notes. The URL fragment is the transport layer for this feature.'
     ]),
-    createSection('data-privacy', '6. Data & Privacy', [
+    createSection('keyboard-shortcuts', '6. Keyboard Shortcuts', [
+      'DevPad includes a full keyboard interaction system for navigation, editing, search, export, import, and settings control.',
+      'Use Ctrl+/ on Windows or Cmd+/ on Mac to open the shortcuts reference panel, and Ctrl+P or Cmd+P for the command palette.'
+    ]),
+    createSection('data-privacy', '7. Data & Privacy', [
       'DevPad is a private notes app designed around local-first storage. Your notes stay in IndexedDB in your browser unless you export or share them yourself.',
       'There is no backend database and no application server that stores your notes. This makes DevPad suitable for privacy-conscious offline note taking and browser-based drafting.'
     ]),
-    createSection('developer-tips', '7. Tips for Developers', [
+    createSection('developer-tips', '8. Tips for Developers', [
       'Use Save to keep note titles intentional, especially for architecture notes or reusable snippets.',
       'Use fenced code blocks for snippets, markdown tables for references, and encryption for sensitive drafts or personal technical notes.'
     ])
@@ -106,7 +110,7 @@ if (root instanceof HTMLElement) {
   faq.id = 'faq';
 
   const faqTitle = document.createElement('h2');
-  faqTitle.textContent = '8. FAQ';
+  faqTitle.textContent = '9. FAQ';
   faq.append(faqTitle);
 
   const faqItems = [
