@@ -2,7 +2,8 @@ import {
   deleteLine,
   moveLineDown,
   moveLineUp,
-  redo
+  redo,
+  undo
 } from '@codemirror/commands';
 import {
   CURRENT_SHARE_VERSION,
@@ -737,6 +738,7 @@ export function mountApp(root: HTMLElement): void {
     activeNoteId = note.id;
     setEditorDocument(note.content);
     renderSidebarList();
+    editorView.focus();
   }
 
   async function removeNote(id: string): Promise<void> {
@@ -1704,8 +1706,18 @@ export function mountApp(root: HTMLElement): void {
       }
     },
     {
+      id: 'undo',
+      combo: combo('undo'),
+      handler: () => {
+        if (hasBlockingModalOpen()) {
+          return;
+        }
+        undo(editorView);
+      }
+    },
+    {
       id: 'redo',
-      combo: combo('redo'),
+      combo: 'mod+shift+z',
       handler: () => {
         if (hasBlockingModalOpen()) {
           return;
@@ -1715,7 +1727,7 @@ export function mountApp(root: HTMLElement): void {
     },
     {
       id: 'redo',
-      combo: 'mod+shift+z',
+      combo: combo('redo'),
       handler: () => {
         if (hasBlockingModalOpen()) {
           return;

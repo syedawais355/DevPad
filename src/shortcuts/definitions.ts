@@ -32,7 +32,8 @@ export type ShortcutId =
   | 'open_shortcuts_help'
   | 'open_settings'
   | 'toggle_theme'
-  | 'toggle_fullscreen';
+  | 'toggle_fullscreen'
+  | 'undo';
 
 export interface ShortcutDefinition {
   id: ShortcutId;
@@ -102,6 +103,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   { id: 'bold', category: 'Editing', combo: 'mod+b', description: 'Bold selection' },
   { id: 'italic', category: 'Editing', combo: 'mod+i', description: 'Italic selection' },
   { id: 'underline', category: 'Editing', combo: 'mod+u', description: 'Underline selection' },
+  { id: 'undo', category: 'Editing', combo: 'mod+z', description: 'Undo' },
   { id: 'redo', category: 'Editing', combo: 'mod+y', description: 'Redo' },
   { id: 'delete_line', category: 'Editing', combo: 'mod+shift+k', description: 'Delete line' },
   { id: 'move_line_up', category: 'Editing', combo: 'alt+shift+arrowup', description: 'Move line up' },
