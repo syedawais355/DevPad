@@ -61,7 +61,13 @@ function eventMatchesCombo(event: KeyboardEvent, combo: ParsedCombo, isMac: bool
   if (event.shiftKey !== combo.shift) {
     return false;
   }
-  return normalizeKey(event.key) === combo.key;
+
+  const eventKey = normalizeKey(event.key);
+  // For single characters, normalize to lowercase to match correctly with Shift
+  if (eventKey.length === 1 && combo.key.length === 1) {
+    return eventKey.toLowerCase() === combo.key.toLowerCase();
+  }
+  return eventKey === combo.key;
 }
 
 export function isInputLikeTarget(target: EventTarget | null): boolean {
@@ -108,8 +114,9 @@ export function setupShortcutSystem(
     }
   };
 
-  targetWindow.addEventListener('keydown', onKeyDown);
+  // Use capture phase to intercept shortcuts before browser or other listeners
+  targetWindow.addEventListener('keydown', onKeyDown, true);
   return () => {
-    targetWindow.removeEventListener('keydown', onKeyDown);
+    targetWindow.removeEventListener('keydown', onKeyDown, true);
   };
 }
